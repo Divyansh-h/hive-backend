@@ -4,28 +4,42 @@ import com.hive.content.dto.PostResponse;
 import com.hive.content.service.ContentService;
 import com.hive.social.entity.Follow;
 import com.hive.social.repository.FollowRepository;
+import io.micrometer.core.instrument.Counter;
+import io.micrometer.core.instrument.MeterRegistry;
+import io.micrometer.core.instrument.Timer;
 import java.util.Collections;
 import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.redis.core.ListOperations;
 import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.stereotype.Service;
 
 @Service
-@RequiredArgsConstructor
 @Slf4j
 public class FeedService {
 
     private final RedisTemplate<String, String> redisTemplate;
-    private final ContentService contentService; // Access via Service Interface
+    private final ContentService contentService;
     private final FollowRepository followRepository;
+    private final Timer feedLatencyTimer;
+    private final Counter fallbackCounter;
 
     private static final String FEED_KEY_PREFIX = "user:feed:";
     private static final int MAX_FEED_SIZE = 100;
+
+    public FeedService(RedisTemplate<String, String> redisTemplate,
+            ContentService contentService,
+            FollowRepository followRepository,
+            MeterRegistry registry) {
+        this.redisTemplate = redisTemplate;
+        this.contentService = contentService;
+        this.followRepository = followRepository;
+        this.feedLatencyTimer = registry.timer("feed.latency");
+        this.fallbackCounter = registry.counter("feed.fallback.rate");
+    }
 
     public void addToFeed(UUID userId, String postId) {
         String key = FEED_KEY_PREFIX + userId;
@@ -43,24 +57,27 @@ public class FeedService {
     }
 
     public List<PostResponse> getFeed(UUID userId, int page, int size) {
-        String key = FEED_KEY_PREFIX + userId;
-        long start = (long) page * size;
-        long end = start + size - 1;
+        return feedLatencyTimer.record(() -> {
+            String key = FEED_KEY_PREFIX + userId;
+            long start = (long) page * size;
+            long end = start + size - 1;
 
-        try {
-            List<String> feedPostIds = redisTemplate.opsForList().range(key, start, end);
-            if (feedPostIds != null && !feedPostIds.isEmpty()) {
-                List<UUID> postUuids = feedPostIds.stream()
-                        .map(UUID::fromString)
-                        .collect(Collectors.toList());
-                // Hydrate via ContentService
-                return contentService.getPostsByIds(postUuids);
+            try {
+                List<String> feedPostIds = redisTemplate.opsForList().range(key, start, end);
+                if (feedPostIds != null && !feedPostIds.isEmpty()) {
+                    List<UUID> postUuids = feedPostIds.stream()
+                            .map(UUID::fromString)
+                            .collect(Collectors.toList());
+                    // Hydrate via ContentService
+                    return contentService.getPostsByIds(postUuids);
+                }
+            } catch (Exception e) {
+                log.warn("Redis Unavailable. Falling back to DB for user: {}", userId);
+                fallbackCounter.increment();
             }
-        } catch (Exception e) {
-            log.warn("Redis Unavailable. Falling back to DB for user: {}", userId);
-        }
 
-        return getFeedFromFallback(userId, size);
+            return getFeedFromFallback(userId, size);
+        });
     }
 
     private List<PostResponse> getFeedFromFallback(UUID userId, int limit) {

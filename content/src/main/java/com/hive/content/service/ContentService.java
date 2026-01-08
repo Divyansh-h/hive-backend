@@ -6,23 +6,34 @@ import com.hive.content.dto.PostResponse;
 import com.hive.content.entity.Post;
 import com.hive.content.repository.PostRepository;
 import com.hive.identity.service.IdentityService;
+import io.micrometer.core.instrument.MeterRegistry;
+import io.micrometer.core.instrument.Timer;
 import java.util.List;
 import java.util.UUID;
 import java.util.stream.Collectors;
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 @Service
-@RequiredArgsConstructor
 @Slf4j
 public class ContentService {
 
     private final PostRepository postRepository;
     private final ApplicationEventPublisher eventPublisher;
     private final IdentityService identityService;
+    private final Timer hydrationLatencyTimer;
+
+    public ContentService(PostRepository postRepository,
+            ApplicationEventPublisher eventPublisher,
+            IdentityService identityService,
+            MeterRegistry registry) {
+        this.postRepository = postRepository;
+        this.eventPublisher = eventPublisher;
+        this.identityService = identityService;
+        this.hydrationLatencyTimer = registry.timer("content.hydration.latency");
+    }
 
     @Transactional
     public PostResponse createPost(UUID userId, CreatePostRequest request) {
@@ -48,16 +59,16 @@ public class ContentService {
 
     @Transactional(readOnly = true)
     public List<PostResponse> getPostsByIds(List<UUID> postIds) {
-        return postRepository.findAllById(postIds).stream()
+        return hydrationLatencyTimer.record(() -> postRepository.findAllById(postIds).stream()
                 .map(this::mapToResponse)
-                .collect(Collectors.toList());
+                .collect(Collectors.toList()));
     }
 
     @Transactional(readOnly = true)
     public List<PostResponse> getPostsByAuthors(List<UUID> authorIds) {
-        return postRepository.findByUserIdInOrderByCreatedAtDesc(authorIds).stream()
+        return hydrationLatencyTimer.record(() -> postRepository.findByUserIdInOrderByCreatedAtDesc(authorIds).stream()
                 .map(this::mapToResponse)
-                .collect(Collectors.toList());
+                .collect(Collectors.toList()));
     }
 
     private PostResponse mapToResponse(Post post) {

@@ -1,0 +1,26 @@
+server:
+  port: 8080
+
+spring:
+  application:
+    name: hive-backend
+  datasource:
+    url: jdbc:postgresql://localhost:5432/hivedb
+    username: hiveuser
+    password: hivepassword
+    driver-class-name: org.postgresql.Driver
+  jpa:
+    hibernate:
+      ddl-auto: update
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.PostgreSQLDialect
+  data:
+    redis:
+      host: localhost
+      port: 6379
+
+logging:
+  level:
+    com.hive: DEBUG
+    org.springframework: INFO

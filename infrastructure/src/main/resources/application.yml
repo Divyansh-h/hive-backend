@@ -4,6 +4,9 @@ server:
 spring:
   application:
     name: hive-backend
+  threads:
+    virtual:
+      enabled: true
   datasource:
     url: jdbc:postgresql://localhost:5432/hivedb
     username: hiveuser
